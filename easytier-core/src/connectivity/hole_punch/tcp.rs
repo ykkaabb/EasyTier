@@ -302,8 +302,15 @@ where
     Ok(port)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TcpHolePunchConnectOptions<'a> {
+    admission: TcpHolePunchAdmission,
+    max_attempts: u32,
+    protocol_scheme: &'a str,
+}
+
 // TCP supports simultaneous connect, so both peers may dial from the mapped port.
-pub async fn try_connect_to_remote<H, AcceptedSocket>(
+async fn try_connect_to_remote<H, AcceptedSocket>(
     host: Arc<H>,
     transport_sink: Arc<
         dyn TcpHolePunchTransportSink<
@@ -314,9 +321,7 @@ pub async fn try_connect_to_remote<H, AcceptedSocket>(
     remote_mapped_addr: SocketAddr,
     local_port: u16,
     context: SocketContext,
-    admission: TcpHolePunchAdmission,
-    max_attempts: u32,
-    protocol_scheme: &str,
+    options: TcpHolePunchConnectOptions<'_>,
 ) -> anyhow::Result<()>
 where
     H: VirtualTcpSocketFactory,
@@ -334,11 +339,11 @@ where
     } else {
         IpVersion::V4
     });
-    let requested_url = transport_url(protocol_scheme, remote_mapped_addr)?;
+    let requested_url = transport_url(options.protocol_scheme, remote_mapped_addr)?;
 
     let start = crate::foundation::time::Instant::now();
     let mut attempts = 0_u32;
-    while start.elapsed() < Duration::from_secs(10) && attempts < max_attempts {
+    while start.elapsed() < Duration::from_secs(10) && attempts < options.max_attempts {
         attempts = attempts.wrapping_add(1);
         let bind = TcpBindOptions::default()
             .with_context(context.clone())
@@ -351,7 +356,7 @@ where
                 .await
         {
             let admission_result = transport_sink
-                .add_connected_transport(socket, requested_url.clone(), admission)
+                .add_connected_transport(socket, requested_url.clone(), options.admission)
                 .await;
             match admission_result {
                 Ok(()) => {}
@@ -372,7 +377,7 @@ where
                 ?remote_mapped_addr,
                 local_port,
                 attempts,
-                ?admission,
+                admission = ?options.admission,
                 "tcp hole punch server connected and added tunnel"
             );
             return Ok(());
@@ -650,9 +655,11 @@ where
                 remote_mapped_addr,
                 local_port,
                 socket_context,
-                TcpHolePunchAdmission::Client,
-                5,
-                &task_transport,
+                TcpHolePunchConnectOptions {
+                    admission: TcpHolePunchAdmission::Client,
+                    max_attempts: 5,
+                    protocol_scheme: &task_transport,
+                },
             )
             .await;
         });
@@ -763,9 +770,11 @@ where
             remote_mapped_addr,
             local_port,
             self.socket_context.clone(),
-            TcpHolePunchAdmission::Server,
-            1,
-            &selected_transport,
+            TcpHolePunchConnectOptions {
+                admission: TcpHolePunchAdmission::Server,
+                max_attempts: 1,
+                protocol_scheme: &selected_transport,
+            },
         )
         .await
         .is_ok()
