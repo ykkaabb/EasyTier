@@ -14,7 +14,7 @@ it does for TCP, UDP, WebSocket, or QUIC today.
 ## Terminology
 
 - `rtls`: TLS 1.3 over TCP with a configurable cover SNI, authenticated ClientHello,
-  pinned relay identity, and byte-for-byte fallback to a configured HTTPS target.
+  TLS-exporter channel proofs, and byte-for-byte fallback to a configured HTTPS target.
 - `h3cam`: standard QUIC plus a real HTTP/3 request and HTTP Datagrams, protected by a
   short-lived admission probe and an optional UDP fallback mapping.
 
@@ -36,10 +36,9 @@ The relay service identity is independent from an EasyTier network identity. A p
 service node may therefore relay many foreign EasyTier networks without knowing their
 names or secrets.
 
-- Relay links authenticate the service node with its stable secure-mode key and an
-  optional service-level short ID.
+- Relay links authenticate with an independent service-level shared secret.
 - P2P links authenticate with a domain-separated key derived from the existing
-  EasyTier network identity and bind the handshake to both peer IDs.
+  EasyTier network name and secret.
 - Both sides negotiate the P2P transport. Mixed-version peers either fall back to an
   explicitly configured upstream transport or fail closed.
 - Secrets must be redacted from configuration dumps, management APIs, and logs.
@@ -56,19 +55,18 @@ network_secret = "change-me"
 [camouflage]
 server_name = "www.example.com"
 tcp_target = "www.example.com:443"
-p2p_transport = "rtls"
-p2p_fallback = "disabled"
+relay_secret = "replace-with-a-random-service-secret"
+p2p_mode = "require"
 
 [[peer]]
-uri = "rtls://relay.example.net:20260?short_id=00112233aabbccdd"
-peer_public_key = "base64-x25519-public-key"
+uri = "rtls://relay.example.net:20260"
 ```
 
 ## Milestone 1: RTLS relay transport
 
 1. Add a feature-gated `rtls` protocol scheme and TCP transport metadata.
 2. Add typed, redacted TOML configuration for SNI, fallback target, time window, and
-   allowed short IDs.
+   service-level relay secret.
 3. Implement the Rust RTLS client/server adapter at the native protocol seam.
 4. Authenticate the ClientHello before returning any EasyTier protocol response.
 5. Verify the service identity on the client without relying on a public CA for the
@@ -92,8 +90,8 @@ Acceptance criteria:
 2. Extend the TCP hole-punch RPC with backward-compatible supported/requested transport
    fields.
 3. Reuse EasyTier's existing client/server admission roles to choose TLS roles.
-4. Derive a P2P camouflage key from the network identity with Argon2id/HKDF domain
-   separation and bind tokens to source/destination peer IDs and a time window.
+4. Derive a P2P camouflage key from the network identity with HMAC-SHA256 domain
+   separation and bind tokens to the cover name and a time window.
 5. Support `allow` and `require` policies. `require` must never silently downgrade to
    raw TCP.
 6. Keep EasyTier's existing connection scoring, duplicate suppression, and failover.
@@ -151,3 +149,11 @@ Acceptance criteria:
 The first delivery covers Milestones 1 and 2 only: RTLS for configured/relay links and
 TCP P2P links. HTTP/3 work begins only after RTLS passes Linux and Windows end-to-end
 tests and demonstrates stable subnet-proxy traffic under loss and reconnects.
+
+## Current implementation status
+
+- Milestone 1: implemented on `feature/camouflage-transports`; CI validation in progress.
+- Milestone 2: transport negotiation and RTLS upgrade implemented for TCP hole punching;
+  real-NAT interoperability and sustained-loss validation remain before release tagging.
+- Milestones 3-5: planned only; no `h3cam` wire implementation or GUI/Android controls
+  exist yet.
