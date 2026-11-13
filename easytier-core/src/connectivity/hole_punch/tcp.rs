@@ -654,6 +654,7 @@ where
     peer_source: Arc<P>,
     transport_sink: Arc<TcpHolePunchTransportSinkFor<H>>,
     blacklist: TcpHolePunchBlacklist,
+    protocol_policy: TcpHolePunchProtocolPolicy,
 }
 
 impl<H, P> TcpHolePunchConnectorData<H, P>
@@ -956,6 +957,7 @@ where
             peer_source: peer_source.clone(),
             transport_sink: transport_sink.clone(),
             blacklist: TcpHolePunchBlacklist::new(),
+            protocol_policy: protocol_policy.clone(),
         });
         Self {
             server: TcpHolePunchServer::new(

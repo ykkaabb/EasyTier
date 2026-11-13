@@ -623,11 +623,15 @@ where
         } = config;
         #[cfg(not(feature = "proxy-packet"))]
         let _ = startup_plan;
+        #[cfg(not(feature = "tcp-hole-punch"))]
+        let _ = &tcp_hole_punch_protocol;
         if connectivity_mode == CoreConnectivityMode::InboundOnly && !initial_peers.is_empty() {
             anyhow::bail!("inbound-only connectivity does not support outbound peers");
         }
         let accepted_tunnel_handler = PeerAcceptedTunnelHandler::new(&peer_manager, events.clone());
         let hole_punch_server_protocol = server_protocol.clone();
+        #[cfg(not(feature = "tcp-hole-punch"))]
+        let _ = &hole_punch_server_protocol;
         let accepted_transport_handler: Arc<
             dyn AcceptedSocketHandler<AcceptedTransport<HostAcceptedTcpSocket<H>>>,
         > = match server_protocol {
