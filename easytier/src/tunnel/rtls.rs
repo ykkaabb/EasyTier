@@ -975,4 +975,74 @@ mod tests {
         .await
         .expect("RTLS end-to-end test timed out");
     }
+
+    #[tokio::test]
+    async fn unauthenticated_tls_is_forwarded_to_cover_target() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let base_settings = RtlsSettings {
+                server_name: "www.example.com".to_owned(),
+                fallback_target: None,
+                secret: Arc::from(b"relay service secret".as_slice()),
+                time_window: Duration::from_secs(30),
+                handshake_timeout: Duration::from_secs(5),
+            };
+            let cover_engine = RtlsEngine::new(base_settings.clone()).unwrap();
+            let cover_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let cover_address = cover_listener.local_addr().unwrap();
+            let cover_config = cover_engine.server_config.clone();
+            let cover_task = tokio::spawn(async move {
+                let (socket, _) = cover_listener.accept().await.unwrap();
+                let mut tls = TlsAcceptor::from(cover_config)
+                    .accept(socket)
+                    .await
+                    .unwrap();
+                tls.write_all(b"cover-ok").await.unwrap();
+                tls.shutdown().await.unwrap();
+            });
+
+            let relay = Arc::new(
+                RtlsEngine::new(RtlsSettings {
+                    fallback_target: Some(cover_address.to_string()),
+                    ..base_settings
+                })
+                .unwrap(),
+            );
+            let relay_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let relay_address = relay_listener.local_addr().unwrap();
+            let relay_url: url::Url = format!("rtls://{relay_address}").parse().unwrap();
+            let relay_task = tokio::spawn(async move {
+                let (socket, _) = relay_listener.accept().await.unwrap();
+                relay
+                    .accept(RuntimeTcpSocket::new(socket), relay_url)
+                    .await
+                    .unwrap()
+            });
+
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let mut client_config = ClientConfig::builder_with_provider(provider.clone())
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(RtlsServerVerifier(provider)))
+                .with_no_client_auth();
+            client_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+            let socket = TcpStream::connect(relay_address).await.unwrap();
+            let mut tls = TlsConnector::from(Arc::new(client_config))
+                .connect(
+                    ServerName::try_from("www.example.com".to_owned()).unwrap(),
+                    socket,
+                )
+                .await
+                .unwrap();
+            let mut response = [0_u8; 8];
+            tls.read_exact(&mut response).await.unwrap();
+            assert_eq!(&response, b"cover-ok");
+            tls.shutdown().await.unwrap();
+
+            cover_task.await.unwrap();
+            assert!(relay_task.await.unwrap().is_none());
+        })
+        .await
+        .expect("RTLS fallback test timed out");
+    }
 }
