@@ -74,22 +74,43 @@ impl Default for TcpHolePunchProtocolPolicy {
 }
 
 impl TcpHolePunchProtocolPolicy {
+    fn supports(&self, transport: &str) -> bool {
+        transport == self.preferred || (transport == "tcp" && self.allow_fallback)
+    }
+
     fn select(&self, requested: &str, remote_allows_fallback: bool) -> anyhow::Result<String> {
         let requested = if requested.is_empty() {
             "tcp"
         } else {
             requested
         };
-        if requested == self.preferred {
+        if !matches!(requested, "tcp" | "rtls")
+            || !matches!(self.preferred.as_str(), "tcp" | "rtls")
+        {
+            anyhow::bail!("unsupported TCP hole-punch transport: {requested}");
+        }
+        if self.supports(requested) {
             return Ok(requested.to_owned());
         }
-        if self.allow_fallback && remote_allows_fallback {
+        let remote_supports_tcp = requested == "tcp" || remote_allows_fallback;
+        if self.supports("tcp") && remote_supports_tcp {
             return Ok("tcp".to_owned());
         }
         anyhow::bail!(
             "no common TCP hole-punch transport (remote requested {requested}, local prefers {})",
             self.preferred
         )
+    }
+
+    fn validate_selected(&self, selected: &str) -> anyhow::Result<String> {
+        let selected = if selected.is_empty() { "tcp" } else { selected };
+        if !matches!(selected, "tcp" | "rtls") || !self.supports(selected) {
+            anyhow::bail!(
+                "peer selected unsupported TCP hole-punch transport {selected} (local prefers {})",
+                self.preferred
+            );
+        }
+        Ok(selected.to_owned())
     }
 }
 
@@ -727,19 +748,9 @@ where
             .listener_mapped_addr
             .ok_or_else(|| anyhow::anyhow!("listener_mapped_addr is required"))?;
         let remote_mapped_addr = remote_mapped_addr.into();
-        let selected_transport = if response.selected_transport.is_empty() {
-            "tcp".to_owned()
-        } else {
-            response.selected_transport
-        };
-        if selected_transport != self.protocol_policy.preferred
-            && !self.protocol_policy.allow_fallback
-        {
-            anyhow::bail!(
-                "peer selected {selected_transport} but local policy requires {}",
-                self.protocol_policy.preferred
-            );
-        }
+        let selected_transport = self
+            .protocol_policy
+            .validate_selected(&response.selected_transport)?;
         tracing::info!(
             dst_peer_id,
             ?remote_mapped_addr,
@@ -1016,10 +1027,20 @@ mod tests {
             allow_fallback: true,
         };
         assert_eq!(allow_rtls.select("tcp", true).unwrap(), "tcp");
-        assert!(allow_rtls.select("tcp", false).is_err());
+        assert_eq!(allow_rtls.select("tcp", false).unwrap(), "tcp");
+        assert_eq!(allow_rtls.validate_selected("tcp").unwrap(), "tcp");
+        assert!(allow_rtls.validate_selected("ws").is_err());
+        assert!(require_rtls.validate_selected("tcp").is_err());
+        assert_eq!(require_rtls.validate_selected("rtls").unwrap(), "rtls");
         assert_eq!(
             TcpHolePunchProtocolPolicy::default()
                 .select("", false)
+                .unwrap(),
+            "tcp"
+        );
+        assert_eq!(
+            TcpHolePunchProtocolPolicy::default()
+                .select("rtls", true)
                 .unwrap(),
             "tcp"
         );
