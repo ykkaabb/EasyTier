@@ -329,7 +329,7 @@ impl RtlsEngine {
         }
 
         let replay = ReplaySocket::new(socket, hello.raw);
-        let mut tls = tokio::time::timeout(self.settings.handshake_timeout, async {
+        let tls = tokio::time::timeout(self.settings.handshake_timeout, async {
             let mut tls = TlsAcceptor::from(self.server_config.clone())
                 .accept(replay)
                 .await
