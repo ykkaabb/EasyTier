@@ -349,11 +349,13 @@ where
             .with_context(context.clone())
             .with_local_addr(Some(bind_addr))
             .with_only_v6(true);
-        let options =
+        let connect_options =
             TcpConnectOptions::hole_punch(remote_mapped_addr, Some(bind_addr)).with_bind(bind);
-        if let Ok(Ok(socket)) =
-            crate::foundation::time::timeout(Duration::from_secs(3), host.connect_tcp(options))
-                .await
+        if let Ok(Ok(socket)) = crate::foundation::time::timeout(
+            Duration::from_secs(3),
+            host.connect_tcp(connect_options),
+        )
+        .await
         {
             let admission_result = transport_sink
                 .add_connected_transport(socket, requested_url.clone(), options.admission)
