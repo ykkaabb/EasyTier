@@ -58,6 +58,70 @@ pub enum TcpHolePunchAdmission {
     Server,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TcpHolePunchProtocolPolicy {
+    pub preferred: String,
+    pub allow_fallback: bool,
+}
+
+impl Default for TcpHolePunchProtocolPolicy {
+    fn default() -> Self {
+        Self {
+            preferred: "tcp".to_owned(),
+            allow_fallback: false,
+        }
+    }
+}
+
+impl TcpHolePunchProtocolPolicy {
+    fn supports(&self, transport: &str) -> bool {
+        transport == self.preferred || (transport == "tcp" && self.allow_fallback)
+    }
+
+    fn select(&self, requested: &str, remote_allows_fallback: bool) -> anyhow::Result<String> {
+        let requested = if requested.is_empty() {
+            "tcp"
+        } else {
+            requested
+        };
+        if !matches!(requested, "tcp" | "rtls")
+            || !matches!(self.preferred.as_str(), "tcp" | "rtls")
+        {
+            anyhow::bail!("unsupported TCP hole-punch transport: {requested}");
+        }
+        if self.supports(requested) {
+            return Ok(requested.to_owned());
+        }
+        let remote_supports_tcp = requested == "tcp" || remote_allows_fallback;
+        if self.supports("tcp") && remote_supports_tcp {
+            return Ok("tcp".to_owned());
+        }
+        anyhow::bail!(
+            "no common TCP hole-punch transport (remote requested {requested}, local prefers {})",
+            self.preferred
+        )
+    }
+
+    fn validate_selected(&self, selected: &str) -> anyhow::Result<String> {
+        let selected = if selected.is_empty() { "tcp" } else { selected };
+        if !matches!(selected, "tcp" | "rtls") || !self.supports(selected) {
+            anyhow::bail!(
+                "peer selected unsupported TCP hole-punch transport {selected} (local prefers {})",
+                self.preferred
+            );
+        }
+        Ok(selected.to_owned())
+    }
+}
+
+fn transport_url(scheme: &str, addr: SocketAddr) -> anyhow::Result<url::Url> {
+    let mut url: url::Url = format!("{scheme}://{addr}").parse()?;
+    if scheme == "rtls" {
+        url.query_pairs_mut().append_pair("auth", "p2p");
+    }
+    Ok(url)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TcpPunchCandidate {
     pub peer_id: PeerId,
@@ -186,7 +250,7 @@ where
             .map_err(TcpHolePunchTransportError::Upgrade)?;
         let ServerProtocolUpgrade::Tunnel(tunnel) = upgrade else {
             return Err(TcpHolePunchTransportError::Upgrade(anyhow::anyhow!(
-                "TCP hole-punch protocol returned a tunnel acceptor"
+                "TCP hole-punch protocol did not return a tunnel"
             )));
         };
         self.tunnel_sink
@@ -238,8 +302,15 @@ where
     Ok(port)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TcpHolePunchConnectOptions<'a> {
+    admission: TcpHolePunchAdmission,
+    max_attempts: u32,
+    protocol_scheme: &'a str,
+}
+
 // TCP supports simultaneous connect, so both peers may dial from the mapped port.
-pub async fn try_connect_to_remote<H, AcceptedSocket>(
+async fn try_connect_to_remote<H, AcceptedSocket>(
     host: Arc<H>,
     transport_sink: Arc<
         dyn TcpHolePunchTransportSink<
@@ -250,8 +321,7 @@ pub async fn try_connect_to_remote<H, AcceptedSocket>(
     remote_mapped_addr: SocketAddr,
     local_port: u16,
     context: SocketContext,
-    admission: TcpHolePunchAdmission,
-    max_attempts: u32,
+    options: TcpHolePunchConnectOptions<'_>,
 ) -> anyhow::Result<()>
 where
     H: VirtualTcpSocketFactory,
@@ -269,24 +339,26 @@ where
     } else {
         IpVersion::V4
     });
-    let requested_url: url::Url = format!("tcp://{remote_mapped_addr}").parse().unwrap();
+    let requested_url = transport_url(options.protocol_scheme, remote_mapped_addr)?;
 
     let start = crate::foundation::time::Instant::now();
     let mut attempts = 0_u32;
-    while start.elapsed() < Duration::from_secs(10) && attempts < max_attempts {
+    while start.elapsed() < Duration::from_secs(10) && attempts < options.max_attempts {
         attempts = attempts.wrapping_add(1);
         let bind = TcpBindOptions::default()
             .with_context(context.clone())
             .with_local_addr(Some(bind_addr))
             .with_only_v6(true);
-        let options =
+        let connect_options =
             TcpConnectOptions::hole_punch(remote_mapped_addr, Some(bind_addr)).with_bind(bind);
-        if let Ok(Ok(socket)) =
-            crate::foundation::time::timeout(Duration::from_secs(3), host.connect_tcp(options))
-                .await
+        if let Ok(Ok(socket)) = crate::foundation::time::timeout(
+            Duration::from_secs(3),
+            host.connect_tcp(connect_options),
+        )
+        .await
         {
             let admission_result = transport_sink
-                .add_connected_transport(socket, requested_url.clone(), admission)
+                .add_connected_transport(socket, requested_url.clone(), options.admission)
                 .await;
             match admission_result {
                 Ok(()) => {}
@@ -307,7 +379,7 @@ where
                 ?remote_mapped_addr,
                 local_port,
                 attempts,
-                ?admission,
+                admission = ?options.admission,
                 "tcp hole punch server connected and added tunnel"
             );
             return Ok(());
@@ -340,6 +412,7 @@ pub async fn accept_connections<L, ConnectedSocket>(
         dyn TcpHolePunchTransportSink<ConnectedSocket = ConnectedSocket, AcceptedSocket = L::Socket>,
     >,
     dst_peer_id: PeerId,
+    protocol_scheme: &str,
 ) -> anyhow::Result<()>
 where
     L: VirtualTcpListener,
@@ -348,9 +421,13 @@ where
     loop {
         match listener.accept().await {
             Ok((socket, _)) => {
-                let local_url = format!("tcp://0.0.0.0:{}", listener.local_addr()?.port())
-                    .parse()
-                    .unwrap();
+                let local_url = transport_url(
+                    protocol_scheme,
+                    SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                        listener.local_addr()?.port(),
+                    ),
+                )?;
                 if let Err(error) = transport_sink
                     .add_accepted_transport(socket, local_url)
                     .await
@@ -450,6 +527,7 @@ where
     tasks: Arc<Mutex<JoinSet<()>>>,
     reaper: Mutex<Option<AbortOnDropHandle<()>>>,
     stopping: AtomicBool,
+    protocol_policy: TcpHolePunchProtocolPolicy,
 }
 
 impl<H> TcpHolePunchServer<H>
@@ -461,6 +539,7 @@ where
         stun: Arc<dyn StunInfoProvider>,
         socket_context: SocketContext,
         transport_sink: Arc<TcpHolePunchTransportSinkFor<H>>,
+        protocol_policy: TcpHolePunchProtocolPolicy,
     ) -> Arc<Self> {
         Arc::new(Self {
             host,
@@ -470,6 +549,7 @@ where
             tasks: Arc::new(Mutex::new(JoinSet::new())),
             reaper: Mutex::new(None),
             stopping: AtomicBool::new(true),
+            protocol_policy,
         })
     }
 
@@ -531,6 +611,9 @@ where
             .connector_mapped_addr
             .ok_or_else(|| anyhow::anyhow!("connector_mapped_addr is required"))?;
         let remote_mapped_addr: std::net::SocketAddr = remote_mapped_addr.into();
+        let selected_transport = self
+            .protocol_policy
+            .select(&input.requested_transport, input.allow_transport_fallback)?;
         let remote_ip = remote_mapped_addr.ip();
         if remote_ip.is_unspecified() || remote_ip.is_multicast() {
             tracing::warn!(
@@ -562,6 +645,7 @@ where
         let host = self.host.clone();
         let socket_context = self.socket_context.clone();
         let transport_sink = self.transport_sink.clone();
+        let task_transport = selected_transport.clone();
         let mut tasks = self.tasks.lock().unwrap();
         if self.stopping.load(Ordering::Acquire) {
             return Err(rpc_types::error::Error::Shutdown);
@@ -573,14 +657,18 @@ where
                 remote_mapped_addr,
                 local_port,
                 socket_context,
-                TcpHolePunchAdmission::Client,
-                5,
+                TcpHolePunchConnectOptions {
+                    admission: TcpHolePunchAdmission::Client,
+                    max_attempts: 5,
+                    protocol_scheme: &task_transport,
+                },
             )
             .await;
         });
 
         Ok(TcpHolePunchResponse {
             listener_mapped_addr: Some(local_mapped_addr.into()),
+            selected_transport,
         })
     }
 }
@@ -596,6 +684,7 @@ where
     peer_source: Arc<P>,
     transport_sink: Arc<TcpHolePunchTransportSinkFor<H>>,
     blacklist: TcpHolePunchBlacklist,
+    protocol_policy: TcpHolePunchProtocolPolicy,
 }
 
 impl<H, P> TcpHolePunchConnectorData<H, P>
@@ -658,6 +747,8 @@ where
                 },
                 TcpHolePunchRequest {
                     connector_mapped_addr: Some(local_mapped_addr.into()),
+                    requested_transport: self.protocol_policy.preferred.clone(),
+                    allow_transport_fallback: self.protocol_policy.allow_fallback,
                 },
             )
             .await;
@@ -666,6 +757,9 @@ where
             .listener_mapped_addr
             .ok_or_else(|| anyhow::anyhow!("listener_mapped_addr is required"))?;
         let remote_mapped_addr = remote_mapped_addr.into();
+        let selected_transport = self
+            .protocol_policy
+            .validate_selected(&response.selected_transport)?;
         tracing::info!(
             dst_peer_id,
             ?remote_mapped_addr,
@@ -678,8 +772,11 @@ where
             remote_mapped_addr,
             local_port,
             self.socket_context.clone(),
-            TcpHolePunchAdmission::Server,
-            1,
+            TcpHolePunchConnectOptions {
+                admission: TcpHolePunchAdmission::Server,
+                max_attempts: 1,
+                protocol_scheme: &selected_transport,
+            },
         )
         .await
         .is_ok()
@@ -718,7 +815,12 @@ where
 
         crate::foundation::time::timeout(
             Duration::from_secs(10),
-            accept_connections(listener, self.transport_sink.clone(), dst_peer_id),
+            accept_connections(
+                listener,
+                self.transport_sink.clone(),
+                dst_peer_id,
+                &selected_transport,
+            ),
         )
         .await??;
 
@@ -862,6 +964,7 @@ where
         socket_context: SocketContext,
         client_protocol: Arc<dyn ClientProtocolUpgrader<ConnectedTcpSocket<H>>>,
         server_protocol: Arc<dyn ServerProtocolUpgrader<AcceptedTcpSocket<H>>>,
+        protocol_policy: TcpHolePunchProtocolPolicy,
     ) -> Self {
         let transport_sink: Arc<TcpHolePunchTransportSinkFor<H>> =
             Arc::new(ProtocolTcpHolePunchTransportSink::new(
@@ -876,9 +979,16 @@ where
             peer_source: peer_source.clone(),
             transport_sink: transport_sink.clone(),
             blacklist: TcpHolePunchBlacklist::new(),
+            protocol_policy: protocol_policy.clone(),
         });
         Self {
-            server: TcpHolePunchServer::new(host, stun, socket_context, transport_sink),
+            server: TcpHolePunchServer::new(
+                host,
+                stun,
+                socket_context,
+                transport_sink,
+                protocol_policy,
+            ),
             client: PeerTaskManager::new_with_external_signal(
                 TcpHolePunchPeerTaskLauncher(data),
                 Some(peer_source.p2p_demand_notify()),
@@ -913,6 +1023,39 @@ mod tests {
 
     use super::*;
     use crate::tunnel::Tunnel;
+
+    #[test]
+    fn protocol_policy_negotiates_or_fails_closed() {
+        let require_rtls = TcpHolePunchProtocolPolicy {
+            preferred: "rtls".to_owned(),
+            allow_fallback: false,
+        };
+        assert_eq!(require_rtls.select("rtls", false).unwrap(), "rtls");
+        assert!(require_rtls.select("tcp", true).is_err());
+
+        let allow_rtls = TcpHolePunchProtocolPolicy {
+            preferred: "rtls".to_owned(),
+            allow_fallback: true,
+        };
+        assert_eq!(allow_rtls.select("tcp", true).unwrap(), "tcp");
+        assert_eq!(allow_rtls.select("tcp", false).unwrap(), "tcp");
+        assert_eq!(allow_rtls.validate_selected("tcp").unwrap(), "tcp");
+        assert!(allow_rtls.validate_selected("ws").is_err());
+        assert!(require_rtls.validate_selected("tcp").is_err());
+        assert_eq!(require_rtls.validate_selected("rtls").unwrap(), "rtls");
+        assert_eq!(
+            TcpHolePunchProtocolPolicy::default()
+                .select("", false)
+                .unwrap(),
+            "tcp"
+        );
+        assert_eq!(
+            TcpHolePunchProtocolPolicy::default()
+                .select("rtls", true)
+                .unwrap(),
+            "tcp"
+        );
+    }
 
     #[derive(Default)]
     struct MockProtocols {

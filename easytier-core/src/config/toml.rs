@@ -150,6 +150,11 @@ pub trait ConfigLoader: Send + Sync {
     fn get_secure_mode(&self) -> Option<SecureModeConfig>;
     fn set_secure_mode(&self, secure_mode: Option<SecureModeConfig>);
 
+    fn get_camouflage(&self) -> Option<CamouflageConfig> {
+        None
+    }
+    fn set_camouflage(&self, _camouflage: Option<CamouflageConfig>) {}
+
     fn get_credential_file(&self) -> Option<std::path::PathBuf> {
         None
     }
@@ -287,6 +292,53 @@ impl Default for NetworkIdentity {
 pub struct PeerConfig {
     pub uri: url::Url,
     pub peer_public_key: Option<String>,
+}
+
+fn default_camouflage_time_window_seconds() -> u64 {
+    30
+}
+
+fn default_camouflage_handshake_timeout_seconds() -> u64 {
+    5
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum P2pCamouflageMode {
+    #[default]
+    Disabled,
+    Allow,
+    Require,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CamouflageConfig {
+    pub server_name: String,
+    pub tcp_target: Option<String>,
+    pub relay_secret: Option<String>,
+    #[serde(default)]
+    pub p2p_mode: P2pCamouflageMode,
+    #[serde(default = "default_camouflage_time_window_seconds")]
+    pub time_window_seconds: u64,
+    #[serde(default = "default_camouflage_handshake_timeout_seconds")]
+    pub handshake_timeout_seconds: u64,
+}
+
+impl std::fmt::Debug for CamouflageConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CamouflageConfig")
+            .field("server_name", &self.server_name)
+            .field("tcp_target", &self.tcp_target)
+            .field(
+                "relay_secret",
+                &self.relay_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("p2p_mode", &self.p2p_mode)
+            .field("time_window_seconds", &self.time_window_seconds)
+            .field("handshake_timeout_seconds", &self.handshake_timeout_seconds)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -443,6 +495,8 @@ struct Config {
 
     secure_mode: Option<SecureModeConfig>,
 
+    camouflage: Option<CamouflageConfig>,
+
     #[serde(default)]
     flags: FlagsPatch,
 
@@ -546,6 +600,14 @@ impl TomlConfig {
             && !private_key.is_empty()
         {
             *private_key = REDACTED.to_owned();
+        }
+        if let Some(relay_secret) = config
+            .camouflage
+            .as_mut()
+            .and_then(|camouflage| camouflage.relay_secret.as_mut())
+            && !relay_secret.is_empty()
+        {
+            *relay_secret = REDACTED.to_owned();
         }
         if let Some(private_key) = config
             .vpn_portal_config
@@ -1046,6 +1108,14 @@ impl ConfigLoader for TomlConfig {
         self.config.lock().unwrap().secure_mode = secure_mode;
     }
 
+    fn get_camouflage(&self) -> Option<CamouflageConfig> {
+        self.config.lock().unwrap().camouflage.clone()
+    }
+
+    fn set_camouflage(&self, camouflage: Option<CamouflageConfig>) {
+        self.config.lock().unwrap().camouflage = camouflage;
+    }
+
     fn get_credential_file(&self) -> Option<PathBuf> {
         self.config.lock().unwrap().credential_file.clone()
     }
@@ -1254,6 +1324,43 @@ socket_mark = 0
         assert_eq!(restored.get_listener_uris(), config.get_listener_uris());
         assert_eq!(restored.get_flags().mtu, 1420);
         assert_eq!(restored.get_flags().socket_mark, Some(0));
+    }
+
+    #[cfg(feature = "config-write")]
+    #[test]
+    fn camouflage_round_trip_and_redaction() {
+        let config = TomlConfig::new_from_str(
+            r#"
+[camouflage]
+server_name = "www.example.com"
+tcp_target = "www.example.com:443"
+relay_secret = "service-secret"
+p2p_mode = "require"
+time_window_seconds = 45
+handshake_timeout_seconds = 7
+"#,
+        )
+        .unwrap();
+
+        let camouflage = config.get_camouflage().unwrap();
+        assert_eq!(camouflage.server_name, "www.example.com");
+        assert_eq!(
+            camouflage.tcp_target.as_deref(),
+            Some("www.example.com:443")
+        );
+        assert_eq!(camouflage.relay_secret.as_deref(), Some("service-secret"));
+        assert_eq!(camouflage.p2p_mode, P2pCamouflageMode::Require);
+        assert_eq!(camouflage.time_window_seconds, 45);
+        assert_eq!(camouflage.handshake_timeout_seconds, 7);
+
+        let dumped = config.dump();
+        assert!(dumped.contains("service-secret"));
+        let restored = TomlConfig::new_from_str(&dumped).unwrap();
+        assert_eq!(restored.get_camouflage(), config.get_camouflage());
+
+        let redacted = config.dump_redacted();
+        assert!(!redacted.contains("service-secret"));
+        assert!(redacted.contains("<redacted>"));
     }
 
     #[test]

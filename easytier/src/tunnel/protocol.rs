@@ -177,6 +177,7 @@ mod tests {
         assert_eq!(external.supports_scheme("wss"), cfg!(feature = "websocket"));
         assert_eq!(external.supports_scheme("wg"), cfg!(feature = "wireguard"));
         assert_eq!(external.supports_scheme("quic"), cfg!(feature = "quic"));
+        assert_eq!(external.supports_scheme("rtls"), cfg!(feature = "rtls"));
 
         let upgrader = runtime_client_protocol_upgrader(global_ctx.clone());
 
@@ -188,6 +189,7 @@ mod tests {
         assert_eq!(upgrader.supports_scheme("wss"), cfg!(feature = "websocket"));
         assert_eq!(upgrader.supports_scheme("wg"), cfg!(feature = "wireguard"));
         assert_eq!(upgrader.supports_scheme("quic"), cfg!(feature = "quic"));
+        assert_eq!(upgrader.supports_scheme("rtls"), cfg!(feature = "rtls"));
         assert_eq!(
             upgrader.supports_scheme("faketcp"),
             cfg!(feature = "faketcp")
@@ -213,6 +215,10 @@ mod tests {
             server_external.supports_scheme("quic"),
             cfg!(feature = "quic")
         );
+        assert_eq!(
+            server_external.supports_scheme("rtls"),
+            cfg!(feature = "rtls")
+        );
 
         let server = runtime_server_protocol_upgrader(global_ctx);
         assert!(server.supports_scheme("tcp"));
@@ -222,6 +228,7 @@ mod tests {
         assert_eq!(server.supports_scheme("ws"), cfg!(feature = "websocket"));
         assert_eq!(server.supports_scheme("wg"), cfg!(feature = "wireguard"));
         assert_eq!(server.supports_scheme("quic"), cfg!(feature = "quic"));
+        assert_eq!(server.supports_scheme("rtls"), cfg!(feature = "rtls"));
     }
 
     #[cfg(feature = "websocket")]

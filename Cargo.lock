@@ -2570,6 +2570,7 @@ dependencies = [
  "hickory-resolver",
  "hickory-server",
  "hkdf",
+ "hmac 0.12.1",
  "http",
  "http-body-util",
  "humansize",
