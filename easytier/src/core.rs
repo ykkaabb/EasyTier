@@ -516,6 +516,16 @@ struct RpcPortalOptions {
 }
 
 impl Cli {
+    fn automatic_listener_schemes() -> impl Iterator<Item = &'static IpScheme> {
+        IpScheme::VARIANTS.iter().filter(|scheme| {
+            #[cfg(feature = "rtls")]
+            if matches!(**scheme, IpScheme::Rtls) {
+                return false;
+            }
+            true
+        })
+    }
+
     fn take_runtime_thread_count(&mut self) -> u32 {
         let count = self
             .network_options
@@ -538,7 +548,7 @@ impl Cli {
 
     fn gen_listeners(addr: SocketAddr) -> impl Iterator<Item = String> {
         let dynamic = addr.port() == 0;
-        IpScheme::VARIANTS.iter().map(move |proto| {
+        Self::automatic_listener_schemes().map(move |proto| {
             let mut addr = addr;
             if !dynamic {
                 addr.set_port(addr.port() + proto.port_offset());
@@ -1666,14 +1676,16 @@ mod tests {
         for (input, output) in cases {
             assert_eq!(
                 Cli::parse_listeners(false, vec![input.to_string()]).unwrap(),
-                IpScheme::VARIANTS.iter().map(output).collect::<Vec<_>>()
+                Cli::automatic_listener_schemes()
+                    .map(output)
+                    .collect::<Vec<_>>()
             );
         }
 
         let input = cases.iter().map(|(i, _)| i.to_string()).collect::<Vec<_>>();
         let output = cases
             .iter()
-            .flat_map(|(_, o)| IpScheme::VARIANTS.iter().map(o))
+            .flat_map(|(_, o)| Cli::automatic_listener_schemes().map(o))
             .collect::<Vec<_>>();
         assert_eq!(Cli::parse_listeners(false, input).unwrap(), output);
 

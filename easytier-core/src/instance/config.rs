@@ -8,10 +8,11 @@ use crate::{
         gateway::{GatewayRuntimeConfig, ProxyRuntimeConfig},
         peers::{AclRuleConfig, HostRoutingPolicy, PublicIpv6ProviderConfig},
         runtime::CoreRuntimeConfig,
-        toml::{ConfigLoader as _, Flags, TomlConfig},
+        toml::{ConfigLoader as _, Flags, P2pCamouflageMode, TomlConfig},
     },
     connectivity::{
         direct::DirectConnectorOptions,
+        hole_punch::tcp::TcpHolePunchProtocolPolicy,
         manual::{ManualConnectorOptions, discovery::ManualEndpointDiscoveryConfig},
         stun::StunServerConfig,
     },
@@ -360,6 +361,21 @@ impl CoreInstanceConfig {
             },
         };
         let stun_servers = config.get_stun_servers();
+        let tcp_hole_punch_protocol = match config
+            .get_camouflage()
+            .map(|camouflage| camouflage.p2p_mode)
+            .unwrap_or_default()
+        {
+            P2pCamouflageMode::Disabled => TcpHolePunchProtocolPolicy::default(),
+            P2pCamouflageMode::Allow => TcpHolePunchProtocolPolicy {
+                preferred: "rtls".to_owned(),
+                allow_fallback: true,
+            },
+            P2pCamouflageMode::Require => TcpHolePunchProtocolPolicy {
+                preferred: "rtls".to_owned(),
+                allow_fallback: false,
+            },
+        };
 
         Ok(Self {
             instance_name: config.get_inst_name(),
@@ -427,6 +443,7 @@ impl CoreInstanceConfig {
                     udp_bind,
                     testing: false,
                 },
+                tcp_hole_punch_protocol,
             },
         })
     }
@@ -437,6 +454,37 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
     use super::*;
+
+    #[test]
+    fn camouflage_p2p_mode_normalizes_to_tcp_hole_punch_policy() {
+        for (mode, preferred, allow_fallback) in [
+            ("disabled", "tcp", false),
+            ("allow", "rtls", true),
+            ("require", "rtls", false),
+        ] {
+            let config = TomlConfig::new_from_str(&format!(
+                r#"
+[camouflage]
+server_name = "www.example.com"
+relay_secret = "service-secret"
+p2p_mode = "{mode}"
+"#
+            ))
+            .unwrap();
+            let normalized = CoreInstanceConfig::from_toml(&config).unwrap();
+            assert_eq!(
+                normalized.connectivity.tcp_hole_punch_protocol.preferred,
+                preferred
+            );
+            assert_eq!(
+                normalized
+                    .connectivity
+                    .tcp_hole_punch_protocol
+                    .allow_fallback,
+                allow_fallback
+            );
+        }
+    }
 
     #[test]
     fn udp_fec_rejects_mtu_overhead_underflow() {

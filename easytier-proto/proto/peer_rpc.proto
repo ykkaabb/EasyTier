@@ -280,9 +280,18 @@ service UdpHolePunchRpc {
       returns (SendPunchPacketBothEasySymResponse);
 }
 
-message TcpHolePunchRequest { common.SocketAddr connector_mapped_addr = 1; }
+message TcpHolePunchRequest {
+  common.SocketAddr connector_mapped_addr = 1;
+  // Empty means the legacy raw TCP transport.
+  string requested_transport = 2;
+  bool allow_transport_fallback = 3;
+}
 
-message TcpHolePunchResponse { common.SocketAddr listener_mapped_addr = 1; }
+message TcpHolePunchResponse {
+  common.SocketAddr listener_mapped_addr = 1;
+  // Empty responses from older peers mean raw TCP.
+  string selected_transport = 2;
+}
 
 service TcpHolePunchRpc {
   rpc ExchangeMappedAddr(TcpHolePunchRequest) returns (TcpHolePunchResponse);

@@ -199,6 +199,8 @@ pub struct CoreConnectivityConfig {
     pub endpoint_discovery: ManualEndpointDiscoveryConfig,
     pub manual: ManualConnectorOptions,
     pub direct: DirectConnectorOptions,
+    #[serde(default)]
+    pub tcp_hole_punch_protocol: crate::connectivity::hole_punch::tcp::TcpHolePunchProtocolPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -617,6 +619,7 @@ where
             endpoint_discovery,
             manual: manual_options,
             direct: direct_options,
+            tcp_hole_punch_protocol,
         } = config;
         #[cfg(not(feature = "proxy-packet"))]
         let _ = startup_plan;
@@ -624,6 +627,7 @@ where
             anyhow::bail!("inbound-only connectivity does not support outbound peers");
         }
         let accepted_tunnel_handler = PeerAcceptedTunnelHandler::new(&peer_manager, events.clone());
+        let hole_punch_server_protocol = server_protocol.clone();
         let accepted_transport_handler: Arc<
             dyn AcceptedSocketHandler<AcceptedTransport<HostAcceptedTcpSocket<H>>>,
         > = match server_protocol {
@@ -803,11 +807,14 @@ where
                     stun.clone(),
                     direct_options.tcp_bind.context.clone(),
                     protocol.clone(),
-                    Arc::new(crate::connectivity::protocol::CoreServerProtocolUpgrader::<
-                        HostAcceptedTcpSocket<H>,
-                    >::new(
-                        crate::connectivity::protocol::CoreServerProtocolConfig::default(),
-                    )),
+                    hole_punch_server_protocol.clone().unwrap_or_else(|| {
+                        Arc::new(crate::connectivity::protocol::CoreServerProtocolUpgrader::<
+                            HostAcceptedTcpSocket<H>,
+                        >::new(
+                            crate::connectivity::protocol::CoreServerProtocolConfig::default(),
+                        ))
+                    }),
+                    tcp_hole_punch_protocol.clone(),
                 )
             });
         let direct = match (stun, protocol) {

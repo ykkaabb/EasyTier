@@ -39,6 +39,15 @@ const EXPORTER_LABEL: &[u8] = b"EXPORTER-EasyTier-RTLS-v1";
 const TOKEN_LABEL: &[u8] = b"easytier-rtls-route-v1";
 const SERVER_PROOF_LABEL: &[u8] = b"easytier-rtls-server-proof-v1";
 const CLIENT_PROOF_LABEL: &[u8] = b"easytier-rtls-client-proof-v1";
+const P2P_KEY_LABEL: &[u8] = b"easytier-rtls-p2p-key-v1";
+
+pub(crate) fn derive_p2p_secret(network_name: &str, network_secret: &str) -> [u8; 32] {
+    let mut mac =
+        HmacSha256::new_from_slice(network_secret.as_bytes()).expect("HMAC accepts every key size");
+    mac.update(P2P_KEY_LABEL);
+    mac.update(network_name.as_bytes());
+    mac.finalize().into_bytes().into()
+}
 
 #[derive(Clone)]
 pub(crate) struct RtlsSettings {

@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use easytier_core::{
-    config::toml::ConfigLoader,
+    config::toml::{ConfigLoader, P2pCamouflageMode},
     connectivity::{
         protocol::{
             ClientProtocolUpgrader, ServerProtocolAdmission, ServerProtocolUpgrade,
@@ -17,54 +17,76 @@ use easytier_core::{
 use crate::{
     common::global_ctx::ArcGlobalCtx,
     socket::tcp::RuntimeTcpSocket,
-    tunnel::rtls::{RtlsEngine, RtlsSettings},
+    tunnel::rtls::{RtlsEngine, RtlsSettings, derive_p2p_secret},
 };
 
 use super::{ClientAdapter, ServerAdapter};
 
 #[derive(Debug)]
 struct RtlsAdapter {
-    engine: Result<Arc<RtlsEngine>, Arc<str>>,
+    relay_engine: Result<Arc<RtlsEngine>, Arc<str>>,
+    p2p_engine: Result<Arc<RtlsEngine>, Arc<str>>,
     handshake_timeout: Duration,
 }
 
 impl RtlsAdapter {
     fn new(global_ctx: &ArcGlobalCtx) -> Self {
-        let result = (|| {
-            let config = global_ctx
-                .config
-                .get_camouflage()
-                .ok_or_else(|| anyhow::anyhow!("rtls requires a [camouflage] configuration"))?;
-            let secret = config
-                .relay_secret
-                .filter(|secret| !secret.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("rtls requires camouflage.relay_secret"))?;
-            let handshake_timeout = Duration::from_secs(config.handshake_timeout_seconds);
-            Ok((
-                Arc::new(RtlsEngine::new(RtlsSettings {
-                    server_name: config.server_name,
-                    fallback_target: config.tcp_target,
-                    secret: Arc::from(secret.into_bytes()),
-                    time_window: Duration::from_secs(config.time_window_seconds),
-                    handshake_timeout,
-                })?),
-                handshake_timeout,
-            ))
-        })();
-        match result {
-            Ok((engine, handshake_timeout)) => Self {
-                engine: Ok(engine),
-                handshake_timeout,
-            },
-            Err(error) => Self {
-                engine: Err(Arc::from(error.to_string())),
+        let Some(config) = global_ctx.config.get_camouflage() else {
+            let error: Arc<str> = Arc::from("rtls requires a [camouflage] configuration");
+            return Self {
+                relay_engine: Err(error.clone()),
+                p2p_engine: Err(error),
                 handshake_timeout: Duration::from_secs(5),
-            },
+            };
+        };
+        let handshake_timeout = Duration::from_secs(config.handshake_timeout_seconds);
+        let create_engine = |secret: Vec<u8>| {
+            RtlsEngine::new(RtlsSettings {
+                server_name: config.server_name.clone(),
+                fallback_target: config.tcp_target.clone(),
+                secret: Arc::from(secret),
+                time_window: Duration::from_secs(config.time_window_seconds),
+                handshake_timeout,
+            })
+            .map(Arc::new)
+            .map_err(|error| Arc::from(error.to_string()))
+        };
+        let relay_engine = config
+            .relay_secret
+            .as_deref()
+            .filter(|secret| !secret.is_empty())
+            .ok_or_else(|| Arc::from("rtls requires camouflage.relay_secret"))
+            .and_then(|secret| create_engine(secret.as_bytes().to_vec()));
+        let network = global_ctx.config.get_network_identity();
+        let p2p_engine = if config.p2p_mode == P2pCamouflageMode::Disabled {
+            Err(Arc::from("RTLS P2P transport is disabled"))
+        } else {
+            network
+                .network_secret
+                .as_deref()
+                .filter(|secret| !secret.is_empty())
+                .ok_or_else(|| Arc::from("RTLS P2P requires a non-empty network_secret"))
+                .and_then(|secret| {
+                    create_engine(derive_p2p_secret(&network.network_name, secret).to_vec())
+                })
+        };
+        Self {
+            relay_engine,
+            p2p_engine,
+            handshake_timeout,
         }
     }
 
-    fn engine(&self) -> anyhow::Result<&Arc<RtlsEngine>> {
-        self.engine
+    fn engine(&self, url: &url::Url) -> anyhow::Result<&Arc<RtlsEngine>> {
+        let p2p = url
+            .query_pairs()
+            .any(|(key, value)| key == "auth" && value == "p2p");
+        let engine = if p2p {
+            &self.p2p_engine
+        } else {
+            &self.relay_engine
+        };
+        engine
             .as_ref()
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
@@ -98,7 +120,7 @@ impl ClientProtocolUpgrader<RuntimeTcpSocket> for RtlsAdapter {
         };
         Ok(tokio::time::timeout(
             self.handshake_timeout,
-            self.engine()?.connect(socket, requested_url),
+            self.engine(&requested_url)?.connect(socket, requested_url),
         )
         .await??)
     }
@@ -115,7 +137,7 @@ impl ServerProtocolUpgrader<RuntimeTcpSocket> for RtlsAdapter {
         socket: RuntimeTcpSocket,
         local_url: url::Url,
     ) -> anyhow::Result<ServerProtocolUpgrade> {
-        let tunnel = self.engine()?.accept(socket, local_url).await?;
+        let tunnel = self.engine(&local_url)?.accept(socket, local_url).await?;
         Ok(match tunnel {
             Some(tunnel) => ServerProtocolUpgrade::Tunnel(tunnel),
             None => ServerProtocolUpgrade::Handled,

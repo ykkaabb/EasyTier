@@ -43,10 +43,11 @@ pub(crate) const fn protocol_uses_udp(scheme: &str) -> bool {
 /// into EasyTier's protocol-specific listener set.
 pub const fn protocol_port_offset(scheme: &str) -> Option<u16> {
     match scheme.as_bytes() {
-        b"tcp" | b"udp" | b"rtls" => Some(0),
+        b"tcp" | b"udp" => Some(0),
         b"wg" | b"ws" => Some(1),
         b"quic" | b"wss" => Some(2),
         b"faketcp" => Some(3),
+        b"rtls" => Some(4),
         _ => None,
     }
 }
@@ -478,6 +479,7 @@ mod tests {
             ("ws", 1, 80),
             ("wss", 2, 443),
             ("faketcp", 3, 11013),
+            ("rtls", 4, 443),
         ];
 
         for (scheme, offset, port) in cases {
