@@ -17,6 +17,9 @@ pub mod wireguard;
 #[cfg(feature = "quic")]
 pub mod quic;
 
+#[cfg(feature = "rtls")]
+pub mod rtls;
+
 #[cfg(feature = "websocket")]
 pub mod websocket;
 
@@ -133,6 +136,8 @@ pub enum IpScheme {
     Wg,
     #[cfg(feature = "quic")]
     Quic,
+    #[cfg(feature = "rtls")]
+    Rtls,
     #[cfg(feature = "websocket")]
     Ws,
     #[cfg(feature = "websocket")]

@@ -186,7 +186,7 @@ where
             .map_err(TcpHolePunchTransportError::Upgrade)?;
         let ServerProtocolUpgrade::Tunnel(tunnel) = upgrade else {
             return Err(TcpHolePunchTransportError::Upgrade(anyhow::anyhow!(
-                "TCP hole-punch protocol returned a tunnel acceptor"
+                "TCP hole-punch protocol did not return a tunnel"
             )));
         };
         self.tunnel_sink

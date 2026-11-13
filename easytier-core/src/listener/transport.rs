@@ -108,6 +108,7 @@ where
                 let tunnel = acceptor.accept().await?;
                 let _ = self.handle_tunnel(tunnel).await;
             },
+            ServerProtocolUpgrade::Handled => Ok(()),
         }
     }
 }

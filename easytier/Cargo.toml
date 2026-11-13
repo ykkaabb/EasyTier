@@ -111,6 +111,7 @@ http = { version = "1", default-features = false, features = [
 ], optional = true }
 rcgen = { version = "0.14.10", optional = true }
 tokio-rustls = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
 
 # for tap device
 tun = { package = "tun-easytier", git = "https://github.com/EasyTier/rust-tun", rev = "43621f70b02c47086b40d34fdde997719668a6c0", features = [
@@ -341,6 +342,7 @@ default = [
     "extended-services",
     "linux-netlink",
     "tcp-hole-punch",
+    "rtls",
 ]
 full = [
     "cli",
@@ -363,6 +365,7 @@ full = [
     "endpoint-discovery",
     "extended-services",
     "tcp-hole-punch",
+    "rtls",
 ]
 cli = ["management", "dep:tabled", "dep:humansize", "dep:terminal_size", "dep:unicode-width", "dep:sha2"]
 wireguard = ["vpn-portal", "dep:boringtun", "dep:hkdf", "dep:sha2", "ring-crypto", "easytier-proto/wireguard"]
@@ -383,6 +386,13 @@ websocket = [
     "dep:tokio-rustls",
     "dep:rustls",
     "easytier-proto/websocket",
+]
+rtls = [
+    "dep:rcgen",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:hmac",
+    "dep:sha2",
 ]
 smoltcp = ["easytier-core/proxy-smoltcp-stack"]
 icmp-proxy = ["easytier-core/proxy-packet"]
