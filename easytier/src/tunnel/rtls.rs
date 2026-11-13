@@ -3,7 +3,10 @@ use std::{
     fmt, io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -77,12 +80,19 @@ struct TokenRandom {
     server_name: String,
     secret: Arc<[u8]>,
     time_window: Duration,
+    tag_next_session_id: AtomicBool,
+}
+
+impl TokenRandom {
+    fn arm(&self) {
+        self.tag_next_session_id.store(true, Ordering::Release);
+    }
 }
 
 impl SecureRandom for TokenRandom {
     fn fill(&self, bytes: &mut [u8]) -> Result<(), GetRandomFailed> {
         self.inner.fill(bytes)?;
-        if bytes.len() == TOKEN_BYTES {
+        if bytes.len() == TOKEN_BYTES && self.tag_next_session_id.swap(false, Ordering::AcqRel) {
             let mut nonce = [0_u8; TOKEN_NONCE_BYTES];
             self.inner.fill(&mut nonce)?;
             bytes.copy_from_slice(&new_token(
@@ -167,6 +177,8 @@ impl ReplayCache {
 pub(crate) struct RtlsEngine {
     settings: RtlsSettings,
     client_config: Arc<ClientConfig>,
+    client_token_random: &'static TokenRandom,
+    client_hello_lock: Mutex<()>,
     server_config: Arc<ServerConfig>,
     replay_cache: ReplayCache,
 }
@@ -198,6 +210,7 @@ impl RtlsEngine {
             server_name: settings.server_name.clone(),
             secret: settings.secret.clone(),
             time_window: settings.time_window,
+            tag_next_session_id: AtomicBool::new(false),
         }));
         let mut client_provider = base_provider.clone();
         client_provider.secure_random = token_random;
@@ -224,6 +237,8 @@ impl RtlsEngine {
         Ok(Self {
             settings,
             client_config: Arc::new(client_config),
+            client_token_random: token_random,
+            client_hello_lock: Mutex::new(()),
             server_config: Arc::new(server_config),
             replay_cache: ReplayCache::default(),
         })
@@ -238,10 +253,16 @@ impl RtlsEngine {
         let peer_addr = socket.peer_addr()?;
         let server_name = ServerName::try_from(self.settings.server_name.clone())
             .map_err(|error| TunnelError::InvalidAddr(error.to_string()))?;
-        let mut tls = TlsConnector::from(self.client_config.clone())
-            .connect(server_name, socket)
-            .await
-            .map_err(rt_error)?;
+        // rustls builds ClientConnection synchronously in `connect`; serialize only
+        // that construction so exactly its first 32-byte request (the TLS 1.3
+        // compatibility session ID) receives the routing token. Client random and
+        // key-exchange randomness continue to come directly from the provider.
+        let connector = {
+            let _guard = self.client_hello_lock.lock().unwrap();
+            self.client_token_random.arm();
+            TlsConnector::from(self.client_config.clone()).connect(server_name, socket)
+        };
+        let mut tls = connector.await.map_err(rt_error)?;
         let exporter = tls
             .get_ref()
             .1
@@ -796,7 +817,49 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+
     use super::*;
+    use easytier_core::packet::ZCPacket;
+
+    #[derive(Debug)]
+    struct FixedRandom;
+
+    impl SecureRandom for FixedRandom {
+        fn fill(&self, bytes: &mut [u8]) -> Result<(), GetRandomFailed> {
+            bytes.fill(0xa5);
+            Ok(())
+        }
+    }
+
+    static FIXED_RANDOM: FixedRandom = FixedRandom;
+
+    #[test]
+    fn token_random_only_tags_the_armed_session_id() {
+        let random = TokenRandom {
+            inner: &FIXED_RANDOM,
+            server_name: "www.example.com".to_owned(),
+            secret: Arc::from(b"relay secret".as_slice()),
+            time_window: Duration::from_secs(30),
+            tag_next_session_id: AtomicBool::new(false),
+        };
+        random.arm();
+
+        let mut session_id = [0_u8; TOKEN_BYTES];
+        random.fill(&mut session_id).unwrap();
+        assert!(verify_token(
+            b"relay secret",
+            "www.example.com",
+            Duration::from_secs(30),
+            SystemTime::now(),
+            &session_id
+        ));
+
+        let mut client_random = [0_u8; TOKEN_BYTES];
+        random.fill(&mut client_random).unwrap();
+        assert_eq!(client_random, [0xa5; TOKEN_BYTES]);
+    }
 
     #[test]
     fn token_round_trip_and_tamper_detection() {
@@ -863,5 +926,53 @@ mod tests {
         assert!(cache.admit([1; TOKEN_BYTES], Duration::from_secs(10)));
         assert!(!cache.admit([1; TOKEN_BYTES], Duration::from_secs(10)));
         assert!(cache.admit([2; TOKEN_BYTES], Duration::from_secs(10)));
+    }
+
+    #[tokio::test]
+    async fn authenticated_engines_exchange_framed_packets() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let settings = RtlsSettings {
+                server_name: "www.example.com".to_owned(),
+                fallback_target: None,
+                secret: Arc::from(b"shared service secret".as_slice()),
+                time_window: Duration::from_secs(30),
+                handshake_timeout: Duration::from_secs(5),
+            };
+            let server = Arc::new(RtlsEngine::new(settings.clone()).unwrap());
+            let client = RtlsEngine::new(settings).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let url: url::Url = format!("rtls://{address}").parse().unwrap();
+            let server_url = url.clone();
+            let server_task = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                server
+                    .accept(RuntimeTcpSocket::new(socket), server_url)
+                    .await
+                    .unwrap()
+                    .expect("authenticated RTLS connection")
+            });
+
+            let socket = TcpStream::connect(address).await.unwrap();
+            let client_tunnel = client
+                .connect(RuntimeTcpSocket::new(socket), url)
+                .await
+                .unwrap();
+            let server_tunnel = server_task.await.unwrap();
+            assert_eq!(client_tunnel.info().unwrap().tunnel_type, "rtls");
+            assert_eq!(server_tunnel.info().unwrap().tunnel_type, "rtls");
+
+            let (_client_stream, mut client_sink) = client_tunnel.split();
+            let (mut server_stream, _server_sink) = server_tunnel.split();
+            client_sink
+                .send(ZCPacket::new_with_payload(b"rtls-e2e"))
+                .await
+                .unwrap();
+            client_sink.flush().await.unwrap();
+            let received = server_stream.next().await.unwrap().unwrap();
+            assert_eq!(received.payload(), b"rtls-e2e");
+        })
+        .await
+        .expect("RTLS end-to-end test timed out");
     }
 }
