@@ -1,0 +1,25 @@
+instance_name = "home-gateway"
+hostname = "home-gateway"
+ipv4 = "192.168.100.1"
+
+[[peer]]
+uri = "rtls://RELAY_HOST:20260"
+
+[[proxy_network]]
+cidr = "192.168.3.0/24"
+
+[network_identity]
+network_name = "REPLACE_WITH_NETWORK_NAME"
+network_secret = "REPLACE_WITH_NETWORK_SECRET"
+
+[camouflage]
+server_name = "www.speedtest.cn"
+tcp_target = "www.speedtest.cn:443"
+relay_secret = "REPLACE_WITH_A_LONG_RANDOM_SERVICE_SECRET"
+p2p_mode = "require"
+time_window_seconds = 30
+handshake_timeout_seconds = 5
+
+[flags]
+disable_udp_hole_punching = true
+disable_tcp_hole_punching = false

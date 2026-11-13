@@ -1,0 +1,15 @@
+instance_name = "rtls-relay"
+hostname = "rtls-relay"
+listeners = ["rtls://0.0.0.0:20260"]
+
+[network_identity]
+network_name = "public-relay"
+network_secret = ""
+
+[camouflage]
+server_name = "www.speedtest.cn"
+tcp_target = "www.speedtest.cn:443"
+relay_secret = "REPLACE_WITH_A_LONG_RANDOM_SERVICE_SECRET"
+p2p_mode = "disabled"
+time_window_seconds = 30
+handshake_timeout_seconds = 5
