@@ -1,0 +1,82 @@
+name: Publish Windows GUI Prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        default: v2.7.0-rtls.2
+      gui_run_id:
+        description: Successful Windows GUI workflow run ID
+        required: true
+      target_commit:
+        description: Commit used to build the GUI
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download Windows x86_64 GUI
+        uses: actions/download-artifact@v5
+        with:
+          name: easytier-gui-windows-x86_64
+          path: dist
+          run-id: ${{ inputs.gui_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          installer="$(find dist -maxdepth 1 -type f -name '*.exe' -print -quit)"
+          if [[ -z "$installer" ]]; then
+            echo "Windows GUI installer not found" >&2
+            exit 1
+          fi
+          cp "$installer" "release/easytier-gui-windows-x86_64-${TAG}-setup.exe"
+          (cd release && sha256sum *.exe > SHA256SUMS.txt)
+          ls -lh release
+
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Windows GUI RTLS configuration release
+
+          This prerelease replaces the incomplete GUI asset from `v2.7.0-rtls.1`.
+
+          Included and verified:
+          - A dedicated RTLS camouflage section between basic network and general advanced settings.
+          - `rtls://` peer and listener protocol selection.
+          - Persistent SNI, fallback target, relay secret, TCP P2P policy, time window, and handshake timeout settings.
+          - Validation for missing RTLS settings and relay secret.
+          - A warning and inline control for UDP hole punching when TCP P2P is set to require RTLS.
+          - Protobuf, Rust management-config, TOML, and frontend round-trip support.
+
+          Compatibility:
+          - Normal EasyTier protocols remain compatible with upstream 2.7.0.
+          - `p2p_mode = "allow"` may fall back to raw TCP for an older peer.
+          - `p2p_mode = "require"` intentionally rejects older peers that cannot negotiate RTLS.
+          - `rtls://` relay links require this fork on both ends.
+
+          The Windows installer is currently unsigned, so SmartScreen may show an unknown-publisher warning.
+          EOF
+
+      - name: Create GitHub prerelease
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "${{ inputs.target_commit }}" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --prerelease \
+            release/*
