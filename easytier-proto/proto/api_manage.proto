@@ -20,6 +20,15 @@ enum ConfigSource {
   ConfigSourceWeb = 2;
 }
 
+message CamouflageConfig {
+  optional string server_name = 1;
+  optional string tcp_target = 2;
+  optional string relay_secret = 3;
+  optional string p2p_mode = 4;
+  optional uint32 time_window_seconds = 5;
+  optional uint32 handshake_timeout_seconds = 6;
+}
+
 message NetworkConfig {
   optional string instance_id = 1;
 
@@ -116,6 +125,7 @@ message NetworkConfig {
   optional bool enable_udp_fec = 78;
   optional bool enable_udp_fec_kcp = 79;
   optional bool enable_udp_fec_quic = 80;
+  optional CamouflageConfig camouflage = 81;
 }
 
 message ManagedCredentialConfig {

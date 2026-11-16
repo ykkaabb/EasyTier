@@ -85,9 +85,41 @@ const secureModeEnabled = computed({
 
 const { t } = useI18n()
 
+const camouflageEnabled = computed({
+  get: () => curNetwork.value.camouflage !== undefined,
+  set: (enabled: boolean) => {
+    if (enabled && !curNetwork.value.camouflage) {
+      curNetwork.value.camouflage = {
+        server_name: 'www.speedtest.cn',
+        tcp_target: 'www.speedtest.cn:443',
+        relay_secret: '',
+        p2p_mode: 'require',
+        time_window_seconds: 30,
+        handshake_timeout_seconds: 5,
+      }
+    } else if (!enabled) {
+      curNetwork.value.camouflage = undefined
+    }
+  },
+})
+
+const camouflageP2pModeOptions = computed(() => [
+  { label: t('camouflage_p2p_disabled'), value: 'disabled' },
+  { label: t('camouflage_p2p_allow'), value: 'allow' },
+  { label: t('camouflage_p2p_require'), value: 'require' },
+])
+
+const hasRtlsUrl = computed(() => [
+  ...(curNetwork.value.peer_urls ?? []),
+  ...(curNetwork.value.listener_urls ?? []),
+].some((url) => url.trim().toLowerCase().startsWith('rtls://')))
+
 const listenerExcludedProtos = new Set(['http', 'https', 'txt', 'srv'])
 const listenerProtos: { [proto: string]: number } = Object.fromEntries(
   Object.entries(protos).filter(([proto]) => !listenerExcludedProtos.has(proto))
+)
+const mappedListenerProtos: { [proto: string]: number } = Object.fromEntries(
+  Object.entries(listenerProtos).filter(([proto]) => proto !== 'rtls')
 )
 
 const inetSuggestions = ref([''])
@@ -368,6 +400,80 @@ function removeVpnPortalClient(index: number) {
 
           <Divider />
 
+          <Panel :header="t('camouflage_panel_title')">
+            <div class="flex flex-col gap-3">
+                <div class="flex items-center gap-3">
+                  <InputSwitch inputId="camouflage_enabled" v-model="camouflageEnabled" />
+                  <label for="camouflage_enabled" class="cursor-pointer">{{ t('camouflage_enabled') }}</label>
+                  <span class="pi pi-question-circle text-sm" v-tooltip.top="t('camouflage_help')"></span>
+                </div>
+
+                <small v-if="hasRtlsUrl && !curNetwork.camouflage" class="text-red-500">
+                  {{ t('camouflage_missing_for_rtls') }}
+                </small>
+
+                <template v-if="curNetwork.camouflage">
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="flex flex-col gap-2">
+                      <label for="camouflage_server_name">{{ t('camouflage_server_name') }}</label>
+                      <InputText id="camouflage_server_name" v-model="curNetwork.camouflage.server_name"
+                        placeholder="www.speedtest.cn"
+                        :class="{ 'p-invalid': !(curNetwork.camouflage.server_name ?? '').trim() }" />
+                    </div>
+                    <div class="flex flex-col gap-2">
+                      <label for="camouflage_tcp_target">{{ t('camouflage_tcp_target') }}</label>
+                      <InputText id="camouflage_tcp_target" v-model="curNetwork.camouflage.tcp_target"
+                        placeholder="www.speedtest.cn:443" />
+                    </div>
+                    <div class="flex flex-col gap-2">
+                      <label for="camouflage_relay_secret">{{ t('camouflage_relay_secret') }}</label>
+                      <Password id="camouflage_relay_secret" v-model="curNetwork.camouflage.relay_secret"
+                        toggleMask :feedback="false" fluid
+                        :class="{ 'p-invalid': hasRtlsUrl && !(curNetwork.camouflage.relay_secret ?? '').trim() }" />
+                    </div>
+                    <div class="flex flex-col gap-2">
+                      <label>{{ t('camouflage_p2p_mode') }}</label>
+                      <SelectButton id="camouflage_p2p_mode" v-model="curNetwork.camouflage.p2p_mode"
+                        :options="camouflageP2pModeOptions" option-label="label" option-value="value"
+                        :allow-empty="false" />
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <Checkbox :model-value="flagChecked('disable_udp_hole_punching')"
+                      input-id="camouflage_disable_udp_hole_punching" :binary="true"
+                      @update:model-value="setFlag('disable_udp_hole_punching', $event)" />
+                    <label for="camouflage_disable_udp_hole_punching">
+                      {{ t('camouflage_disable_udp_hole_punching') }}
+                    </label>
+                  </div>
+                  <small v-if="curNetwork.camouflage.p2p_mode === 'require'
+                    && !flagChecked('disable_udp_hole_punching')" class="text-orange-500">
+                    {{ t('camouflage_udp_bypass_warning') }}
+                  </small>
+                  <details>
+                    <summary class="cursor-pointer text-sm">{{ t('camouflage_advanced') }}</summary>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                      <div class="flex flex-col gap-2">
+                        <label for="camouflage_time_window">{{ t('camouflage_time_window') }}</label>
+                        <InputNumber inputId="camouflage_time_window"
+                          v-model="curNetwork.camouflage.time_window_seconds" :min="1" :max="3600"
+                          :use-grouping="false" />
+                      </div>
+                      <div class="flex flex-col gap-2">
+                        <label for="camouflage_handshake_timeout">{{ t('camouflage_handshake_timeout') }}</label>
+                        <InputNumber inputId="camouflage_handshake_timeout"
+                          v-model="curNetwork.camouflage.handshake_timeout_seconds" :min="1" :max="120"
+                          :use-grouping="false" />
+                      </div>
+                    </div>
+                  </details>
+                  <small class="text-surface-500 dark:text-surface-400">{{ t('camouflage_usage_help') }}</small>
+                </template>
+            </div>
+          </Panel>
+
+          <Divider />
+
           <Panel :header="t('advanced_settings')" toggleable collapsed>
             <div class="flex flex-col gap-y-2">
 
@@ -561,7 +667,7 @@ function removeVpnPortalClient(index: number) {
                     <label for="mapped_listeners">{{ t('mapped_listeners') }}</label>
                     <span class="pi pi-question-circle ml-2 self-center" v-tooltip="t('mapped_listeners_help')"></span>
                   </div>
-                  <UrlListInput v-model="curNetwork.mapped_listeners" :protos="protos"
+                  <UrlListInput v-model="curNetwork.mapped_listeners" :protos="mappedListenerProtos"
                     :add-label="t('add_mapped_listener')" />
                 </div>
               </div>

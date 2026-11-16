@@ -4,6 +4,7 @@ import {
   NetworkingMethod,
   type NetworkPeerConfig,
   type NetworkConfig as ProtoNetworkConfig,
+  type CamouflageConfig,
   type PortForwardConfig,
   type VpnPortalClientConfig,
   type VpnPortalConfig,
@@ -40,7 +41,7 @@ import { prepareNetworkConfigForProtoJson } from './networkCompat'
 
 export { AclAction, AclChainType, AclProtocol, CompressionAlgoPb, DnsRecordType, NatType, NetworkingMethod }
 export { VpnPortalClientState }
-export type { Acl, AclChain, AclRule, AclV1, GroupIdentity, GroupInfo, NetworkPeerConfig, PeerFeatureFlag, PortForwardConfig, SecureModeConfig, VpnPortalClientConfig, VpnPortalClientInfo, VpnPortalConfig, VpnPortalInfo }
+export type { Acl, AclChain, AclRule, AclV1, CamouflageConfig, GroupIdentity, GroupInfo, NetworkPeerConfig, PeerFeatureFlag, PortForwardConfig, SecureModeConfig, VpnPortalClientConfig, VpnPortalClientInfo, VpnPortalConfig, VpnPortalInfo }
 
 export const PEER_PROTOCOLS: { [proto: string]: number } = {
   tcp: 11010,
@@ -48,6 +49,7 @@ export const PEER_PROTOCOLS: { [proto: string]: number } = {
   wg: 11011,
   ws: 11011,
   wss: 11012,
+  rtls: 443,
   quic: 11012,
   faketcp: 11013,
   http: 80,
@@ -199,6 +201,7 @@ export function DEFAULT_NETWORK_CONFIG(): NetworkConfig {
     networking_method: NetworkingMethod.Manual,
     public_server_url: '',
     peer_urls: [],
+    camouflage: undefined,
 
     proxy_cidrs: [],
 

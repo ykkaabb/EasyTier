@@ -126,6 +126,14 @@ function allFieldFixture() {
     networking_method: NetworkingMethod.Manual,
     public_server_url: 'tcp://public.example:11010',
     peer_urls: [' tcp://peer-a:11010 ', '', 'udp://peer-b:11010'],
+    camouflage: {
+      server_name: 'www.speedtest.cn',
+      tcp_target: 'www.speedtest.cn:443',
+      relay_secret: 'relay-secret',
+      p2p_mode: 'require',
+      time_window_seconds: 45,
+      handshake_timeout_seconds: 7,
+    },
     peers: [
       {
         uri: 'tcp://peer-a:11010',

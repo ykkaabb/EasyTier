@@ -171,6 +171,25 @@ const CheckboxStub = defineComponent({
   },
 })
 
+const InputSwitchStub = defineComponent({
+  name: 'InputSwitch',
+  props: {
+    modelValue: Boolean,
+    inputId: String,
+  },
+  emits: ['update:modelValue'],
+  setup(props, { attrs, emit }) {
+    return () => h('input', {
+      ...attrs,
+      id: props.inputId,
+      checked: props.modelValue,
+      type: 'checkbox',
+      'data-stub': 'input-switch',
+      onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).checked),
+    })
+  },
+})
+
 const ToggleButtonStub = defineComponent({
   name: 'ToggleButton',
   props: {
@@ -255,14 +274,24 @@ const SelectButtonStub = defineComponent({
   props: {
     modelValue: String,
     options: Array,
+    optionLabel: String,
+    optionValue: String,
+    id: String,
   },
   emits: ['update:modelValue'],
-  setup(props, { emit }) {
+  setup(props, { attrs, emit }) {
     return () => h('select', {
+      ...attrs,
+      id: props.id,
       value: props.modelValue,
       'data-stub': 'select-button',
       onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value),
-    }, (props.options ?? []).map((option) => h('option', { value: option as string }, option as string)))
+    }, (props.options ?? []).map((option) => {
+      const record = option as Record<string, string>
+      const value = props.optionValue ? record[props.optionValue] : option as string
+      const label = props.optionLabel ? record[props.optionLabel] : option as string
+      return h('option', { value }, label)
+    }))
   },
 })
 
@@ -377,6 +406,7 @@ function mountConfig(config: NetworkConfig = makeConfig()) {
         InputGroup: PassThrough,
         InputGroupAddon: PassThrough,
         InputNumber: InputNumberStub,
+        InputSwitch: InputSwitchStub,
         InputText: InputTextStub,
         MultiSelect: MultiSelectStub,
         Panel: PanelStub,
@@ -401,6 +431,41 @@ async function setInput(wrapper: VueWrapper, selector: string, value: string) {
 }
 
 describe('Config.vue network config projection', () => {
+  it('configures and persists RTLS camouflage settings', async () => {
+    const { curNetwork, wrapper } = mountConfig()
+    await nextTick()
+
+    expect(curNetwork.camouflage).toBeUndefined()
+    expect(input(wrapper, '#camouflage_enabled').checked).toBe(false)
+
+    await wrapper.find('#camouflage_enabled').setValue(true)
+    await nextTick()
+    expect(curNetwork.camouflage).toMatchObject({
+      server_name: 'www.speedtest.cn',
+      tcp_target: 'www.speedtest.cn:443',
+      p2p_mode: 'require',
+      time_window_seconds: 30,
+      handshake_timeout_seconds: 5,
+    })
+
+    await setInput(wrapper, '#camouflage_server_name', 'speed.example.com')
+    await setInput(wrapper, '#camouflage_tcp_target', 'speed.example.com:443')
+    await setInput(wrapper, '#camouflage_relay_secret', 'shared-relay-secret')
+    await wrapper.find('#camouflage_p2p_mode').setValue('allow')
+    await setInput(wrapper, '#camouflage_time_window', '45')
+    await setInput(wrapper, '#camouflage_handshake_timeout', '7')
+
+    const restored = normalizeNetworkConfig(toBackendNetworkConfig(curNetwork))
+    expect(restored.camouflage).toStrictEqual({
+      server_name: 'speed.example.com',
+      tcp_target: 'speed.example.com:443',
+      relay_secret: 'shared-relay-secret',
+      p2p_mode: 'allow',
+      time_window_seconds: 45,
+      handshake_timeout_seconds: 7,
+    })
+  })
+
   it('projects config values into the visible form controls', async () => {
     const { curNetwork, wrapper } = mountConfig()
     await nextTick()

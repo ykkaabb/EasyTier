@@ -24,6 +24,23 @@ use_network_secret: 改用网络密钥
 credential_mode_hint: 使用临时凭证加入网络：连接自动加密，到期自动失效。如果你没有收到凭证，请改用网络密钥。
 public_server_url: 公共服务器地址
 peer_urls: 对等节点地址
+camouflage_enabled: 启用 RTLS 伪装传输
+camouflage_panel_title: RTLS 伪装传输
+camouflage_help: 为 rtls:// 中继连接及 TCP P2P 连接配置 TLS 1.3 域名伪装。
+camouflage_missing_for_rtls: 已配置 rtls:// 地址，请启用并填写 RTLS 伪装传输参数。
+camouflage_server_name: 伪装域名（SNI）
+camouflage_tcp_target: 探测回落目标
+camouflage_relay_secret: RTLS 中继密码
+camouflage_p2p_mode: TCP P2P 的 RTLS 策略
+camouflage_p2p_disabled: 禁用
+camouflage_p2p_allow: 优先 RTLS，可回退
+camouflage_p2p_require: 强制 RTLS
+camouflage_time_window: 认证时间窗口（秒）
+camouflage_handshake_timeout: 握手超时（秒）
+camouflage_advanced: RTLS 高级参数
+camouflage_disable_udp_hole_punching: 禁用 UDP 打洞，避免 P2P 绕过 RTLS
+camouflage_udp_bypass_warning: “强制 RTLS”只约束 TCP P2P；当前 UDP 打洞仍可绕过伪装传输。
+camouflage_usage_help: 中继地址请使用 rtls://主机:端口；两端的伪装域名与中继密码必须一致。若所有直连也必须使用 RTLS，请选择“强制 RTLS”并同时开启“禁用 UDP 打洞”。
 proxy_cidrs: 子网代理CIDR
 vpn_portal_enable: "启用 WireGuard"
 vpn_portal_setup_help: "启动节点后，在状态页的“WireGuard 设备”中添加设备并扫码连接。停用会保留密钥和设备。"

@@ -24,6 +24,23 @@ use_network_secret: Use the network secret instead
 credential_mode_hint: "Join with an admin-issued credential: connections are encrypted automatically and expire on their own. If you did not receive one, use the network secret instead."
 public_server_url: Public Server URL
 peer_urls: Peer URLs
+camouflage_enabled: Enable RTLS camouflage transport
+camouflage_panel_title: RTLS camouflage transport
+camouflage_help: Configure TLS 1.3 domain camouflage for rtls:// relay links and TCP P2P links.
+camouflage_missing_for_rtls: An rtls:// URL is configured. Enable RTLS camouflage and complete its settings.
+camouflage_server_name: Camouflage domain (SNI)
+camouflage_tcp_target: Probe fallback target
+camouflage_relay_secret: RTLS relay secret
+camouflage_p2p_mode: RTLS policy for TCP P2P
+camouflage_p2p_disabled: Disabled
+camouflage_p2p_allow: Prefer RTLS, allow fallback
+camouflage_p2p_require: Require RTLS
+camouflage_time_window: Authentication time window (seconds)
+camouflage_handshake_timeout: Handshake timeout (seconds)
+camouflage_advanced: Advanced RTLS parameters
+camouflage_disable_udp_hole_punching: Disable UDP hole punching so P2P cannot bypass RTLS
+camouflage_udp_bypass_warning: Require RTLS only constrains TCP P2P; UDP hole punching can still bypass camouflage.
+camouflage_usage_help: Use rtls://host:port for the relay URL. Both ends must use the same camouflage domain and relay secret. To require RTLS for every direct link, select Require RTLS and also enable Disable UDP Hole Punching.
 proxy_cidrs: Subnet Proxy CIDRs
 vpn_portal_enable: "Enable WireGuard"
 vpn_portal_setup_help: "After starting the node, open WireGuard devices on the status page to add a device and scan its QR code. Disabling keeps your keys and devices."

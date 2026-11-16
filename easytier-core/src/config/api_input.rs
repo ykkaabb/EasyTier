@@ -15,8 +15,8 @@ use optionize::{Optionizable, Optionized};
 use crate::config::{
     MappedListenerPolicy, normalize_secure_mode_config,
     toml::{
-        ConfigLoader, NetworkIdentity, PeerConfig, PortForwardConfig, TomlConfigLoader,
-        VpnPortalClientConfig, VpnPortalConfig,
+        CamouflageConfig, ConfigLoader, NetworkIdentity, P2pCamouflageMode, PeerConfig,
+        PortForwardConfig, TomlConfigLoader, VpnPortalClientConfig, VpnPortalConfig,
     },
 };
 
@@ -144,6 +144,7 @@ const FORM_MANAGED_TOML_FIELDS: &[&str] = &[
     "acl",
     "credential_file",
     "managed_credentials",
+    "camouflage",
 ];
 
 #[cfg(all(
@@ -245,6 +246,67 @@ fn parse_peer_urls(peer_urls: &[String]) -> Result<Vec<PeerConfig>, anyhow::Erro
         });
     }
     Ok(peers)
+}
+
+fn parse_camouflage(config: &manage::CamouflageConfig) -> Result<CamouflageConfig, anyhow::Error> {
+    let server_name = config.server_name.as_deref().unwrap_or_default().trim();
+    if server_name.is_empty() {
+        anyhow::bail!("camouflage.server_name is required");
+    }
+
+    let p2p_mode = match config.p2p_mode.as_deref().unwrap_or("disabled") {
+        "disabled" | "" => P2pCamouflageMode::Disabled,
+        "allow" => P2pCamouflageMode::Allow,
+        "require" => P2pCamouflageMode::Require,
+        value => anyhow::bail!(
+            "invalid camouflage.p2p_mode: {value}; expected disabled, allow, or require"
+        ),
+    };
+
+    Ok(CamouflageConfig {
+        server_name: server_name.to_owned(),
+        tcp_target: config
+            .tcp_target
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        relay_secret: config
+            .relay_secret
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        p2p_mode,
+        time_window_seconds: config
+            .time_window_seconds
+            .filter(|value| *value > 0)
+            .unwrap_or(30) as u64,
+        handshake_timeout_seconds: config
+            .handshake_timeout_seconds
+            .filter(|value| *value > 0)
+            .unwrap_or(5) as u64,
+    })
+}
+
+fn camouflage_to_api(config: CamouflageConfig) -> manage::CamouflageConfig {
+    manage::CamouflageConfig {
+        server_name: Some(config.server_name),
+        tcp_target: config.tcp_target,
+        relay_secret: config.relay_secret,
+        p2p_mode: Some(
+            match config.p2p_mode {
+                P2pCamouflageMode::Disabled => "disabled",
+                P2pCamouflageMode::Allow => "allow",
+                P2pCamouflageMode::Require => "require",
+            }
+            .to_owned(),
+        ),
+        time_window_seconds: Some(u32::try_from(config.time_window_seconds).unwrap_or(u32::MAX)),
+        handshake_timeout_seconds: Some(
+            u32::try_from(config.handshake_timeout_seconds).unwrap_or(u32::MAX),
+        ),
+    }
 }
 
 impl NetworkConfigExt for NetworkConfig {
@@ -356,6 +418,32 @@ impl NetworkConfigExt for NetworkConfig {
             );
         }
         cfg.set_listeners(listener_urls);
+
+        cfg.set_camouflage(self.camouflage.as_ref().map(parse_camouflage).transpose()?);
+
+        let uses_rtls = cfg
+            .get_peers()
+            .iter()
+            .any(|peer| peer.uri.scheme() == "rtls")
+            || cfg
+                .get_listeners()
+                .unwrap_or_default()
+                .iter()
+                .any(|listener| listener.scheme() == "rtls");
+        if uses_rtls {
+            let camouflage = cfg
+                .get_camouflage()
+                .context("rtls:// peers and listeners require camouflage settings")?;
+            if camouflage
+                .relay_secret
+                .as_deref()
+                .map(str::trim)
+                .filter(|secret| !secret.is_empty())
+                .is_none()
+            {
+                anyhow::bail!("rtls:// peers and listeners require camouflage.relay_secret");
+            }
+        }
 
         for n in self.proxy_cidrs.iter() {
             add_proxy_network_to_config(n, &cfg)?;
@@ -627,6 +715,8 @@ impl NetworkConfigExt for NetworkConfig {
             .iter()
             .map(|l| l.to_string())
             .collect();
+
+        result.camouflage = config.get_camouflage().map(camouflage_to_api);
 
         result.proxy_cidrs = config
             .get_proxy_cidrs()
@@ -916,6 +1006,88 @@ records = [
             networking_method: Some(NetworkingMethod::Standalone as i32),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn camouflage_round_trips_through_management_api() {
+        let mut input = standalone_config();
+        input.camouflage = Some(manage::CamouflageConfig {
+            server_name: Some("www.speedtest.cn".to_owned()),
+            tcp_target: Some("www.speedtest.cn:443".to_owned()),
+            relay_secret: Some("relay-secret".to_owned()),
+            p2p_mode: Some("require".to_owned()),
+            time_window_seconds: Some(45),
+            handshake_timeout_seconds: Some(7),
+        });
+
+        let config = input.gen_config().unwrap();
+        assert_eq!(
+            config.get_camouflage(),
+            Some(CamouflageConfig {
+                server_name: "www.speedtest.cn".to_owned(),
+                tcp_target: Some("www.speedtest.cn:443".to_owned()),
+                relay_secret: Some("relay-secret".to_owned()),
+                p2p_mode: P2pCamouflageMode::Require,
+                time_window_seconds: 45,
+                handshake_timeout_seconds: 7,
+            })
+        );
+
+        let output = NetworkConfig::new_from_config(config).unwrap();
+        assert_eq!(output.camouflage, input.camouflage);
+    }
+
+    #[test]
+    fn camouflage_rejects_invalid_management_values() {
+        let mut input = standalone_config();
+        input.camouflage = Some(manage::CamouflageConfig {
+            server_name: Some("www.speedtest.cn".to_owned()),
+            p2p_mode: Some("invalid".to_owned()),
+            ..Default::default()
+        });
+        assert!(
+            input
+                .gen_config()
+                .unwrap_err()
+                .to_string()
+                .contains("p2p_mode")
+        );
+
+        input.camouflage = Some(manage::CamouflageConfig {
+            server_name: Some("   ".to_owned()),
+            ..Default::default()
+        });
+        assert!(
+            input
+                .gen_config()
+                .unwrap_err()
+                .to_string()
+                .contains("server_name")
+        );
+
+        let mut missing = standalone_config();
+        missing.networking_method = Some(NetworkingMethod::Manual as i32);
+        missing.peer_urls = vec!["rtls://relay.example:443".to_owned()];
+        assert!(
+            missing
+                .gen_config()
+                .unwrap_err()
+                .to_string()
+                .contains("camouflage settings")
+        );
+
+        missing.camouflage = Some(manage::CamouflageConfig {
+            server_name: Some("www.speedtest.cn".to_owned()),
+            p2p_mode: Some("require".to_owned()),
+            ..Default::default()
+        });
+        assert!(
+            missing
+                .gen_config()
+                .unwrap_err()
+                .to_string()
+                .contains("relay_secret")
+        );
     }
 
     #[test]
