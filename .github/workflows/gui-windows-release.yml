@@ -1,0 +1,50 @@
+name: EasyTier GUI Windows Release
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-windows-x86_64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          target: x86_64-pc-windows-msvc
+          gui: true
+          pnpm: true
+          pnpm-build-filter: easytier-gui...
+          token: ${{ github.token }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ""
+          shared-key: gui-release-x86_64-pc-windows-msvc
+          cache-targets: "true"
+
+      - name: Copy Windows runtime files
+        run: |
+          find ./easytier/third_party/x86_64 -maxdepth 1 -type f \( -name "*.dll" -o -name "*.sys" \) \
+            -exec cp {} ./easytier-gui/src-tauri/ \;
+
+      - name: Build unsigned Windows GUI
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ./easytier-gui
+          args: --verbose --target x86_64-pc-windows-msvc
+
+      - name: Upload Windows GUI installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: easytier-gui-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error
