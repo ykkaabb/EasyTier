@@ -17,35 +17,42 @@ val tauriProperties = Properties().apply {
 
 val versionPattern = Regex("""^(\d+)\.(\d+)\.(\d+)$""")
 
-val tauriVersionName = tauriProperties.getProperty("tauri.android.versionName")?.ifBlank { null } ?: run {
+val tauriConfig = run {
     val tauriConfFile = file("../../../tauri.conf.json")
     check(tauriConfFile.exists()) { "Missing tauri.conf.json at ${tauriConfFile.path}" }
 
     val tauriConf = tauriConfFile.reader(Charsets.UTF_8).use { JsonSlurper().parse(it) as? Map<*, *> }
         ?: error("Failed to parse ${tauriConfFile.path} as a JSON object")
-    tauriConf["version"] as? String
-        ?: error("Missing string field \"version\" in ${tauriConfFile.path}")
+    tauriConf
 }
+
+val androidConfigFile = file("../../../tauri.android.conf.json")
+val androidConfig = if (androidConfigFile.exists()) {
+    androidConfigFile.reader(Charsets.UTF_8).use { JsonSlurper().parse(it) as? Map<*, *> }
+        ?: error("Failed to parse ${androidConfigFile.path} as a JSON object")
+} else {
+    emptyMap<String, Any>()
+}
+
+val tauriVersionName = tauriProperties.getProperty("tauri.android.versionName")?.ifBlank { null }
+    ?: (androidConfig["version"] ?: tauriConfig["version"]) as? String
+    ?: error("Missing string field \"version\" in Tauri configuration")
 
 val tauriVersionMatch = versionPattern.matchEntire(tauriVersionName)
     ?: error("Android version must use x.y.z format, but got \"$tauriVersionName\"")
 
-val tauriVersionCode = if (tauriProperties.getProperty("tauri.android.versionName")?.ifBlank { null } != null) {
-    val versionCodeProp = tauriProperties.getProperty("tauri.android.versionCode")
-    if (versionCodeProp != null) {
-        versionCodeProp.toIntOrNull()
-            ?: error("Property \"tauri.android.versionCode\" must be an integer, but got \"$versionCodeProp\"")
-    } else {
-        val (major, minor, patch) = tauriVersionMatch.destructured
-        major.toInt() * 1_000_000 + minor.toInt() * 1_000 + patch.toInt()
-    }
-} else {
+val androidBundle = (androidConfig["bundle"] as? Map<*, *>)?.get("android") as? Map<*, *>
+val tauriVersionCode = tauriProperties.getProperty("tauri.android.versionCode")?.let { value ->
+    value.toIntOrNull()
+        ?: error("Property \"tauri.android.versionCode\" must be an integer, but got \"$value\"")
+} ?: (androidBundle?.get("versionCode") as? Number)?.toInt() ?: run {
     val (major, minor, patch) = tauriVersionMatch.destructured
     major.toInt() * 1_000_000 + minor.toInt() * 1_000 + patch.toInt()
 }
 
 android {
-    compileSdk = 34
+    compileSdk = 36
+    ndkVersion = "26.0.10792818"
     namespace = "com.kkrainbow.easytier"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
