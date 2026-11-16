@@ -152,8 +152,14 @@ tests and demonstrates stable subnet-proxy traffic under loss and reconnects.
 
 ## Current implementation status
 
-- Milestone 1: implemented on `feature/camouflage-transports`; CI validation in progress.
-- Milestone 2: transport negotiation and RTLS upgrade implemented for TCP hole punching;
-  real-NAT interoperability and sustained-loss validation remain before release tagging.
-- Milestones 3-5: planned only; no `h3cam` wire implementation or GUI/Android controls
-  exist yet.
+- Milestone 1: implemented and merged into `main`; relay/configured-peer RTLS is available
+  in the `v2.7.0-rtls.1` prerelease Core assets.
+- Milestone 2: transport negotiation and RTLS upgrade are implemented for TCP hole
+  punching. Real-NAT interoperability and sustained-loss validation remain incomplete.
+- Milestone 3 and 4: planned only; no `h3cam` wire implementation exists yet.
+- Milestone 5: management API and Windows desktop GUI controls are implemented and the
+  corrected GUI is published as `v2.7.0-rtls.2`. Android RTLS product integration,
+  code signing, and the complete cross-platform release matrix remain outstanding.
+
+See `docs/rtls-development-handoff.md` for the exact repository baseline, validation
+evidence, compatibility boundaries, build/release procedure, and prioritized next work.

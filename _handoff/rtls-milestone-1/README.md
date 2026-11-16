@@ -1,5 +1,10 @@
 # RTLS milestone 1 handoff
 
+> **Archived snapshot:** this directory describes the state immediately after the
+> first RTLS core merge. It predates the management API and Windows GUI integration.
+> Continue development from `main` and use
+> `docs/rtls-development-handoff.md` as the current source of truth.
+
 This temporary directory is the entry point for continuing development on another
 computer. The actual source of truth remains in its normal repository locations; do
 not copy source files into this directory or edit duplicated implementations here.
