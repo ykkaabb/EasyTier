@@ -265,4 +265,3 @@ gh workflow run publish-windows-gui-release.yml --ref main \
 - 合并/变基前建立临时分支，并在完成后重新运行 mixed-version 和 RTLS E2E。
 - 文档和 Release notes 不得把 RTLS 描述为 Xray REALITY、sing-box AnyTLS 或 Hysteria
   的 wire-compatible 实现；它只是借鉴了主动探测回落和伪装思路。
-
