@@ -2752,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "easytier-gui"
-version = "2.7.0-rtls.2"
+version = "2.7.0-2"
 dependencies = [
  "anyhow",
  "async-trait",
