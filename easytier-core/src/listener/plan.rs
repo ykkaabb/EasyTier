@@ -144,6 +144,7 @@ where
     for (scheme, kind) in [
         ("ws", ListenerKind::TcpStream),
         ("wss", ListenerKind::TcpStream),
+        ("rtls", ListenerKind::TcpStream),
         ("wg", ListenerKind::UdpSession),
         ("quic", ListenerKind::UdpSession),
     ] {
@@ -370,6 +371,104 @@ fn normalize_scheme(scheme: impl Into<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RtlsProtocol {
+        enabled: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ServerProtocolUpgrader<()> for RtlsProtocol {
+        fn supports_scheme(&self, scheme: &str) -> bool {
+            self.enabled && scheme == "rtls"
+        }
+
+        async fn upgrade_tcp(
+            &self,
+            _socket: (),
+            _local_url: Url,
+        ) -> anyhow::Result<crate::connectivity::protocol::ServerProtocolUpgrade> {
+            unreachable!("listener planning must not perform protocol upgrades")
+        }
+
+        async fn upgrade_udp(
+            &self,
+            _session: crate::socket::udp::UdpSession,
+            _local_url: Url,
+            _admission: Option<crate::connectivity::protocol::ServerProtocolAdmission>,
+        ) -> anyhow::Result<crate::connectivity::protocol::ServerProtocolUpgrade> {
+            unreachable!("listener planning must not perform protocol upgrades")
+        }
+
+        async fn upgrade_byte_stream(
+            &self,
+            _socket: (),
+            _local_url: Url,
+            _remote_url: Option<Url>,
+        ) -> anyhow::Result<crate::connectivity::protocol::ServerProtocolUpgrade> {
+            unreachable!("listener planning must not perform protocol upgrades")
+        }
+    }
+
+    #[test]
+    fn prepare_rtls_listener_uses_tcp_and_ipv6_shadow_when_supported() {
+        let config = ListenerRuntimeConfig::new(
+            vec!["rtls://0.0.0.0:20260".parse().unwrap()],
+            true,
+            SocketContext::default(),
+        );
+        let protocol = RtlsProtocol { enabled: true };
+        let plan = prepare_listener_plan::<(), ()>(
+            Some(&config),
+            uuid::Uuid::new_v4(),
+            Some(&protocol),
+            None,
+        )
+        .unwrap();
+
+        assert!(plan.failures.is_empty());
+        assert!(plan.external.is_empty());
+        assert_eq!(plan.transports.len(), 3);
+        assert!(matches!(
+            plan.transports[0],
+            TransportListenerConfig::Ring { .. }
+        ));
+        let listeners = plan.transports[1..]
+            .iter()
+            .map(|transport| match transport {
+                TransportListenerConfig::Tcp {
+                    url, must_succeed, ..
+                } => (url.as_str(), *must_succeed),
+                _ => panic!("RTLS must use a TCP transport listener"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            listeners,
+            vec![("rtls://0.0.0.0:20260", true), ("rtls://[::]:20260", false)]
+        );
+    }
+
+    #[test]
+    fn prepare_rtls_listener_rejects_missing_protocol_support() {
+        let config = ListenerRuntimeConfig::new(
+            vec!["rtls://0.0.0.0:20260".parse().unwrap()],
+            false,
+            SocketContext::default(),
+        );
+        let protocol = RtlsProtocol { enabled: false };
+        for protocol in [None, Some(&protocol as &dyn ServerProtocolUpgrader<()>)] {
+            let plan = prepare_listener_plan::<(), ()>(
+                Some(&config),
+                uuid::Uuid::new_v4(),
+                protocol,
+                None,
+            )
+            .unwrap();
+
+            assert_eq!(plan.transports.len(), 1);
+            assert_eq!(plan.failures.len(), 1);
+            assert_eq!(plan.failures[0].url.as_str(), "rtls://0.0.0.0:20260");
+        }
+    }
 
     fn registry() -> ListenerSchemeRegistry {
         ListenerSchemeRegistry::new()
